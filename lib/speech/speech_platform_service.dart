@@ -58,6 +58,7 @@ class SpeechToTextSpeechRecognitionService implements SpeechRecognitionService {
     final dynamic started = await _speechToText.listen(
       onResult: onResult,
       listenOptions: SpeechListenOptions(
+        autoPunctuation: true,          // Specific to iOS
         partialResults: partialResults,
         cancelOnError: cancelOnError,
         localeId: localeId,
