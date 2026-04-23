@@ -10,7 +10,7 @@ import 'speech_platform_service.dart';
 class SpeechController extends ChangeNotifier {
   SpeechController({
     required SpeechPlatformService service,
-    this.locale = 'en-US',
+    this.locale = 'ne-NP',
     this.preferredMode = SpeechRecognizerMode.auto,
     this.isSupportedPlatformOverride,
   }) : _service = service;
