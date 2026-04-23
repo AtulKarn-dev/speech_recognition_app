@@ -1,131 +1,114 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
+import 'package:speech_to_text/speech_recognition_error.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+
 import 'package:speech_recognition_app/main.dart';
 import 'package:speech_recognition_app/speech/speech_platform_service.dart';
 
 void main() {
-  testWidgets('renders recognized speech from platform events', (
-    WidgetTester tester,
-  ) async {
-    final service = _FakeSpeechPlatformService(
-      availability: const SpeechAvailability(
-        status: SpeechFeatureStatus.available,
-        supported: true,
-        requiresDownload: false,
-        resolvedMode: SpeechRecognizerMode.basic,
-      ),
-    );
+  testWidgets('renders recognized speech from the service', (tester) async {
+    final service = FakeSpeechRecognitionService();
 
-    await tester.pumpWidget(
-      SpeechRecognitionApp(
-        service: service,
-        debugIsSupportedPlatformOverride: true,
-      ),
-    );
+    await tester.pumpWidget(SpeechRecognitionApp(service: service));
     await tester.pumpAndSettle();
 
-    final sessionId = service.lastSessionId!;
-    service.emit(
-      SpeechTranscriptEvent(
-        sessionId: sessionId,
-        text: 'search for coffee shops',
-        isFinal: true,
-        sequence: 0,
-      ),
-    );
-    await tester.pump();
+    await tester.tap(find.text('Start listening'));
     await tester.pump();
 
-    expect(find.text('search for coffee shops'), findsOneWidget);
-    expect(find.text('Clear text'), findsOneWidget);
+    service.emitResult('hello from voice search', finalResult: true);
+    await tester.pumpAndSettle();
+
+    expect(find.text('hello from voice search'), findsOneWidget);
+    expect(find.text('Listening...'), findsNothing);
   });
 
-  testWidgets('clear text removes the current transcript', (
-    WidgetTester tester,
-  ) async {
-    final service = _FakeSpeechPlatformService(
-      availability: const SpeechAvailability(
-        status: SpeechFeatureStatus.available,
-        supported: true,
-        requiresDownload: false,
-        resolvedMode: SpeechRecognizerMode.basic,
-      ),
-    );
+  testWidgets('clear text removes the current transcript', (tester) async {
+    final service = FakeSpeechRecognitionService();
 
-    await tester.pumpWidget(
-      SpeechRecognitionApp(
-        service: service,
-        debugIsSupportedPlatformOverride: true,
-      ),
-    );
+    await tester.pumpWidget(SpeechRecognitionApp(service: service));
     await tester.pumpAndSettle();
 
-    final sessionId = service.lastSessionId!;
-    service.emit(
-      SpeechTranscriptEvent(
-        sessionId: sessionId,
-        text: 'weather tomorrow',
-        isFinal: true,
-        sequence: 0,
-      ),
-    );
+    await tester.tap(find.text('Start listening'));
     await tester.pump();
-    await tester.pump();
+
+    service.emitResult('clear me later', finalResult: true);
+    await tester.pumpAndSettle();
+
+    expect(find.text('clear me later'), findsOneWidget);
 
     await tester.tap(find.text('Clear text'));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    expect(find.text('weather tomorrow'), findsNothing);
-    expect(find.text('Say a search out loud'), findsOneWidget);
+    expect(find.text('clear me later'), findsNothing);
+    expect(find.text('Your spoken text will appear here.'), findsOneWidget);
   });
 }
 
-class _FakeSpeechPlatformService implements SpeechPlatformService {
-  _FakeSpeechPlatformService({required this.availability});
-
-  final SpeechAvailability availability;
-  final StreamController<SpeechPlatformEvent> _eventsController =
-      StreamController<SpeechPlatformEvent>.broadcast();
-
-  String? lastSessionId;
+class FakeSpeechRecognitionService implements SpeechRecognitionService {
+  bool available = true;
+  bool listening = false;
+  void Function(String status)? _onStatus;
+  void Function(SpeechRecognitionError error)? _onError;
+  void Function(SpeechRecognitionResult result)? _onResult;
 
   @override
-  Stream<SpeechPlatformEvent> get events => _eventsController.stream;
+  bool get isAvailable => available;
 
   @override
-  Future<SpeechAvailability> checkStatus({
-    required String sessionId,
-    required String locale,
-    required SpeechRecognizerMode preferredMode,
+  bool get isListening => listening;
+
+  @override
+  Future<bool> initialize({
+    required void Function(String status) onStatus,
+    required void Function(SpeechRecognitionError error) onError,
+    bool debugLogging = false,
   }) async {
-    lastSessionId = sessionId;
-    return availability;
+    _onStatus = onStatus;
+    _onError = onError;
+    return available;
   }
 
   @override
-  Future<void> close({required String sessionId}) async {
-    await _eventsController.close();
+  Future<bool> listen({
+    required void Function(SpeechRecognitionResult result) onResult,
+    bool partialResults = true,
+    bool cancelOnError = true,
+    String? localeId,
+  }) async {
+    listening = true;
+    _onResult = onResult;
+    _onStatus?.call('listening');
+    return true;
   }
 
   @override
-  Future<void> downloadModel({
-    required String sessionId,
-    required String locale,
-    required SpeechRecognizerMode preferredMode,
-  }) async {}
-
-  void emit(SpeechPlatformEvent event) {
-    _eventsController.add(event);
+  Future<void> stop() async {
+    listening = false;
+    _onStatus?.call('notListening');
   }
 
   @override
-  Future<void> startRecognition({
-    required String sessionId,
-    required String locale,
-    required SpeechRecognizerMode preferredMode,
-  }) async {}
+  Future<void> cancel() async {
+    listening = false;
+    _onStatus?.call('notListening');
+  }
 
-  @override
-  Future<void> stopRecognition({required String sessionId}) async {}
+  void emitResult(String words, {bool finalResult = false}) {
+    final result = SpeechRecognitionResult.init([
+      SpeechRecognitionWords(
+        words,
+        null,
+        SpeechRecognitionWords.missingConfidence,
+      ),
+    ], finalResult ? ResultType.finalResult : ResultType.partial);
+    _onResult?.call(result);
+    if (finalResult) {
+      listening = false;
+      _onStatus?.call('done');
+    }
+  }
+
+  void emitError(String message, {bool permanent = true}) {
+    _onError?.call(SpeechRecognitionError(message, permanent));
+  }
 }
