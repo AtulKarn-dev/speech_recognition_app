@@ -3,7 +3,8 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  speech_to_text_windows
+  permission_handler_windows
+  vosk_flutter_service
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

@@ -5,8 +5,8 @@
 import FlutterMacOS
 import Foundation
 
-import speech_to_text
+import vosk_flutter_service
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
-  SpeechToTextPlugin.register(with: registry.registrar(forPlugin: "SpeechToTextPlugin"))
+  VoskFlutterPlugin.register(with: registry.registrar(forPlugin: "VoskFlutterPlugin"))
 }

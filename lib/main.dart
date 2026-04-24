@@ -50,7 +50,7 @@ class _SpeechRecognitionScreenState extends State<SpeechRecognitionScreen> {
   void initState() {
     super.initState();
     _controller = SpeechController(
-      service: widget.service ?? SpeechToTextSpeechRecognitionService(),
+      service: widget.service ?? VoskSpeechRecognitionService(),
     );
     _controller.initialize();
   }
@@ -113,11 +113,9 @@ class _SpeechRecognitionScreenState extends State<SpeechRecognitionScreen> {
                           children: [
                             Expanded(
                               child: FilledButton.icon(
-                                onPressed: _controller.canStartListening
-                                    ? _controller.startListening
-                                    : (_controller.isListening
-                                          ? _controller.stopListening
-                                          : null),
+                                onPressed: _controller.isListening
+                                    ? _controller.stopListening
+                                    : _controller.startListening,
                                 icon: Icon(
                                   _controller.isListening
                                       ? Icons.stop_rounded
