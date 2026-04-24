@@ -42,11 +42,40 @@ void main() {
     expect(find.text('clear me later'), findsNothing);
     expect(find.text('Your spoken text will appear here.'), findsOneWidget);
   });
+
+  testWidgets('passes the selected language locale into listen', (
+    tester,
+  ) async {
+    final service = FakeSpeechRecognitionService();
+
+    await tester.pumpWidget(SpeechRecognitionApp(service: service));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Hindi'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Start listening'));
+    await tester.pump();
+
+    expect(service.lastLocaleId, 'hi-IN');
+
+    service.emitResult('नमस्ते', finalResult: true);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Nepali'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Start listening'));
+    await tester.pump();
+
+    expect(service.lastLocaleId, 'ne-NP');
+  });
 }
 
 class FakeSpeechRecognitionService implements SpeechRecognitionService {
   bool available = true;
   bool listening = false;
+  String? lastLocaleId;
   void Function(String status)? _onStatus;
   void Function(SpeechRecognitionError error)? _onError;
   void Function(SpeechRecognitionResult result)? _onResult;
@@ -76,6 +105,7 @@ class FakeSpeechRecognitionService implements SpeechRecognitionService {
     String? localeId,
   }) async {
     listening = true;
+    lastLocaleId = localeId;
     _onResult = onResult;
     _onStatus?.call('listening');
     return true;

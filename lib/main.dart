@@ -102,6 +102,8 @@ class _SpeechRecognitionScreenState extends State<SpeechRecognitionScreen> {
                             height: 1.4,
                           ),
                         ),
+                        const SizedBox(height: 20),
+                        _LanguageModeSelector(controller: _controller),
                         const SizedBox(height: 24),
                         _StatusCard(controller: _controller),
                         const SizedBox(height: 16),
@@ -162,6 +164,50 @@ class _SpeechRecognitionScreenState extends State<SpeechRecognitionScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class _LanguageModeSelector extends StatelessWidget {
+  const _LanguageModeSelector({required this.controller});
+
+  final SpeechController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Language mode',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: const Color(0xFF123B36),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SegmentedButton<SpeechLanguageMode>(
+          showSelectedIcon: false,
+          multiSelectionEnabled: false,
+          emptySelectionAllowed: false,
+          segments: controller.supportedLanguages
+              .map(
+                (language) => ButtonSegment<SpeechLanguageMode>(
+                  value: language,
+                  label: Text(language.label),
+                ),
+              )
+              .toList(),
+          selected: {controller.selectedLanguage},
+          onSelectionChanged: controller.isListening
+              ? null
+              : (selection) {
+                  controller.selectLanguage(selection.first);
+                },
+        ),
+      ],
     );
   }
 }

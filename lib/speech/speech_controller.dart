@@ -6,6 +6,32 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 
 import 'speech_platform_service.dart';
 
+enum SpeechLanguageMode { english, hindi, nepali }
+
+extension SpeechLanguageModeDetails on SpeechLanguageMode {
+  String get label {
+    switch (this) {
+      case SpeechLanguageMode.english:
+        return 'English';
+      case SpeechLanguageMode.hindi:
+        return 'Hindi';
+      case SpeechLanguageMode.nepali:
+        return 'Nepali';
+    }
+  }
+
+  String get localeId {
+    switch (this) {
+      case SpeechLanguageMode.english:
+        return 'en-US';
+      case SpeechLanguageMode.hindi:
+        return 'hi-IN';
+      case SpeechLanguageMode.nepali:
+        return 'ne-NP';
+    }
+  }
+}
+
 class SpeechController extends ChangeNotifier {
   SpeechController({required SpeechRecognitionService service})
     : _service = service;
@@ -18,6 +44,7 @@ class SpeechController extends ChangeNotifier {
   String _recognizedText = '';
   String _statusMessage = 'Checking speech recognition...';
   String _errorMessage = '';
+  SpeechLanguageMode _selectedLanguage = SpeechLanguageMode.english;
 
   bool get speechEnabled => _speechEnabled;
 
@@ -29,9 +56,13 @@ class SpeechController extends ChangeNotifier {
 
   String get errorMessage => _errorMessage;
 
+  SpeechLanguageMode get selectedLanguage => _selectedLanguage;
+
   bool get canStartListening => _speechEnabled && !_isListening;
 
   bool get hasTranscript => _recognizedText.trim().isNotEmpty;
+
+  List<SpeechLanguageMode> get supportedLanguages => SpeechLanguageMode.values;
 
   Future<void> initialize() async {
     if (_initialized) {
@@ -75,7 +106,7 @@ class SpeechController extends ChangeNotifier {
       onResult: _handleResult,
       partialResults: true,
       cancelOnError: true,
-      localeId: 'ne-NP',
+      localeId: _selectedLanguage.localeId,
     );
 
     if (started) {
@@ -83,6 +114,19 @@ class SpeechController extends ChangeNotifier {
       _statusMessage = 'Listening...';
     } else {
       _statusMessage = 'Unable to start listening.';
+    }
+    notifyListeners();
+  }
+
+  void selectLanguage(SpeechLanguageMode language) {
+    if (_selectedLanguage == language || _isListening) {
+      return;
+    }
+
+    _selectedLanguage = language;
+    _errorMessage = '';
+    if (_speechEnabled) {
+      _statusMessage = 'Ready to listen.';
     }
     notifyListeners();
   }
