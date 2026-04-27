@@ -5,6 +5,7 @@ import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 
 import 'speech_platform_service.dart';
+import 'speech_session_store.dart';
 
 enum SpeechLanguageMode { english, hindi, nepali }
 
@@ -33,24 +34,35 @@ extension SpeechLanguageModeDetails on SpeechLanguageMode {
 }
 
 class SpeechController extends ChangeNotifier {
-  SpeechController({required SpeechRecognitionService service})
-    : _service = service;
+  SpeechController({
+    required SpeechRecognitionService service,
+    required SpeechSessionStore sessionStore,
+  }) : _service = service,
+       _sessionStore = sessionStore;
 
   final SpeechRecognitionService _service;
+  final SpeechSessionStore _sessionStore;
 
   bool _initialized = false;
   bool _speechEnabled = false;
   bool _isListening = false;
-  String _recognizedText = '';
+  bool _shouldBeListening = false;
+  bool _isStarting = false;
+  bool _restartQueued = false;
+  bool _isDisposed = false;
+  bool _sessionStored = false;
+  bool _isPersistingSession = false;
+  String _committedText = '';
+  String _liveText = '';
   String _statusMessage = 'Checking speech recognition...';
   String _errorMessage = '';
   SpeechLanguageMode _selectedLanguage = SpeechLanguageMode.english;
 
   bool get speechEnabled => _speechEnabled;
 
-  bool get isListening => _isListening;
+  bool get isListening => _isListening || _shouldBeListening || _isStarting;
 
-  String get recognizedText => _recognizedText;
+  String get recognizedText => _joinTranscript(_committedText, _liveText);
 
   String get statusMessage => _statusMessage;
 
@@ -58,9 +70,10 @@ class SpeechController extends ChangeNotifier {
 
   SpeechLanguageMode get selectedLanguage => _selectedLanguage;
 
-  bool get canStartListening => _speechEnabled && !_isListening;
+  bool get canStartListening =>
+      _speechEnabled && !_isListening && !_shouldBeListening && !_isStarting;
 
-  bool get hasTranscript => _recognizedText.trim().isNotEmpty;
+  bool get hasTranscript => recognizedText.trim().isNotEmpty;
 
   List<SpeechLanguageMode> get supportedLanguages => SpeechLanguageMode.values;
 
@@ -70,7 +83,7 @@ class SpeechController extends ChangeNotifier {
     }
     _initialized = true;
     _statusMessage = 'Checking speech recognition...';
-    notifyListeners();
+    _notifyListeners();
 
     try {
       _speechEnabled = await _service.initialize(
@@ -86,36 +99,26 @@ class SpeechController extends ChangeNotifier {
       _statusMessage = _errorMessage;
     }
 
-    notifyListeners();
+    _notifyListeners();
   }
 
   Future<void> startListening() async {
     if (!_initialized) {
       await initialize();
     }
-    if (!_speechEnabled || _isListening) {
+    if (!_speechEnabled || _isListening || _shouldBeListening || _isStarting) {
       return;
     }
 
-    _recognizedText = '';
+    _committedText = '';
+    _liveText = '';
+    _shouldBeListening = true;
+    _sessionStored = false;
     _errorMessage = '';
     _statusMessage = 'Starting speech recognition...';
-    notifyListeners();
+    _notifyListeners();
 
-    final started = await _service.listen(
-      onResult: _handleResult,
-      partialResults: true,
-      cancelOnError: true,
-      localeId: _selectedLanguage.localeId,
-    );
-
-    if (started) {
-      _isListening = true;
-      _statusMessage = 'Listening...';
-    } else {
-      _statusMessage = 'Unable to start listening.';
-    }
-    notifyListeners();
+    await _startRecognitionCycle();
   }
 
   void selectLanguage(SpeechLanguageMode language) {
@@ -128,80 +131,309 @@ class SpeechController extends ChangeNotifier {
     if (_speechEnabled) {
       _statusMessage = 'Ready to listen.';
     }
-    notifyListeners();
+    _notifyListeners();
   }
 
   Future<void> stopListening() async {
-    if (!_isListening) {
+    if (!_shouldBeListening && !_isListening && !_isStarting) {
       return;
     }
 
-    await _service.stop();
+    _shouldBeListening = false;
+    _restartQueued = false;
+    _commitLiveText();
+    if (_isListening || _service.isListening) {
+      await _service.stop();
+    }
     _isListening = false;
-    _statusMessage = _recognizedText.isEmpty
-        ? 'Ready to listen.'
-        : 'Ready for another search.';
-    notifyListeners();
+    _statusMessage = hasTranscript
+        ? 'Ready for another search.'
+        : 'Ready to listen.';
+    _notifyListeners();
+    unawaited(_persistCurrentSession());
   }
 
   Future<void> cancelListening() async {
-    if (!_isListening) {
+    if (!_shouldBeListening && !_isListening && !_isStarting) {
       return;
     }
 
-    await _service.cancel();
+    _shouldBeListening = false;
+    _restartQueued = false;
+    _commitLiveText();
+    if (_isListening || _service.isListening) {
+      await _service.cancel();
+    }
     _isListening = false;
-    _statusMessage = _recognizedText.isEmpty
-        ? 'Ready to listen.'
-        : 'Ready for another search.';
-    notifyListeners();
+    _statusMessage = hasTranscript
+        ? 'Ready for another search.'
+        : 'Ready to listen.';
+    _notifyListeners();
+    unawaited(_persistCurrentSession());
   }
 
   void clearTranscript() {
-    _recognizedText = '';
+    _committedText = '';
+    _liveText = '';
     _errorMessage = '';
     _statusMessage = _speechEnabled
         ? 'Ready to listen.'
         : 'Speech recognition unavailable on this device.';
-    notifyListeners();
+    _notifyListeners();
   }
 
   void _handleStatus(String status) {
     if (status == 'listening') {
+      _isStarting = false;
       _isListening = true;
       _statusMessage = 'Listening...';
     } else if (status == 'notListening' ||
         status == 'done' ||
         status == 'doneNoResult') {
+      _commitLiveText();
+      _isStarting = false;
       _isListening = false;
-      _statusMessage = _recognizedText.isEmpty
-          ? 'Ready to listen.'
-          : 'Ready for another search.';
+      if (_shouldBeListening) {
+        _statusMessage = hasTranscript
+            ? 'Listening...'
+            : 'Starting speech recognition...';
+        _scheduleRestart();
+      } else {
+        _statusMessage = hasTranscript
+            ? 'Ready for another search.'
+            : 'Ready to listen.';
+        unawaited(_persistCurrentSession());
+      }
     } else {
       _statusMessage = status;
     }
-    notifyListeners();
+    _notifyListeners();
   }
 
   void _handleResult(SpeechRecognitionResult result) {
-    _recognizedText = result.recognizedWords;
+    final incomingText = _normalizeText(result.recognizedWords);
+    final mergedChunk = _mergeLiveChunk(
+      committedText: _committedText,
+      liveText: _liveText,
+      incomingText: incomingText,
+    );
+
     if (result.finalResult) {
+      if (mergedChunk.isNotEmpty) {
+        _committedText = _joinTranscript(_committedText, mergedChunk);
+      }
+      _liveText = '';
       _isListening = false;
-      _statusMessage = _recognizedText.isEmpty
-          ? 'Ready to listen.'
-          : 'Ready for another search.';
+      if (_shouldBeListening) {
+        _statusMessage = hasTranscript
+            ? 'Listening...'
+            : 'Starting speech recognition...';
+        _scheduleRestart();
+      } else {
+        _statusMessage = hasTranscript
+            ? 'Ready for another search.'
+            : 'Ready to listen.';
+        unawaited(_persistCurrentSession());
+      }
+      _notifyListeners();
+      return;
     } else {
+      _liveText = mergedChunk;
       _statusMessage = 'Listening...';
     }
-    notifyListeners();
+
+    _notifyListeners();
   }
 
   void _handleError(SpeechRecognitionError error) {
     _errorMessage = _describeError(error);
     if (error.permanent) {
+      _shouldBeListening = false;
+      _isStarting = false;
+      _restartQueued = false;
       _isListening = false;
+      _commitLiveText();
+      unawaited(_persistCurrentSession());
     }
     _statusMessage = _errorMessage;
+    _notifyListeners();
+  }
+
+  Future<void> _persistCurrentSession() async {
+    if (_sessionStored || _isPersistingSession) {
+      return;
+    }
+
+    final transcript = recognizedText.trim();
+    if (transcript.isEmpty) {
+      _sessionStored = true;
+      return;
+    }
+
+    _sessionStored = true;
+    _isPersistingSession = true;
+
+    try {
+      await _sessionStore.saveSession(
+        transcript: transcript,
+        languageLabel: _selectedLanguage.label,
+        localeId: _selectedLanguage.localeId,
+      );
+    } catch (_) {
+      _sessionStored = false;
+      _errorMessage = 'Unable to save this speech session locally.';
+      _notifyListeners();
+    } finally {
+      _isPersistingSession = false;
+    }
+  }
+
+  void _commitLiveText() {
+    if (_liveText.trim().isEmpty) {
+      return;
+    }
+
+    _committedText = _joinTranscript(_committedText, _liveText);
+    _liveText = '';
+  }
+
+  String _normalizeText(String text) {
+    return text.trim().replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  String _joinTranscript(String committedText, String incomingText) {
+    final committed = _normalizeText(committedText);
+    final incoming = _normalizeText(incomingText);
+
+    if (committed.isEmpty) {
+      return incoming;
+    }
+    if (incoming.isEmpty) {
+      return committed;
+    }
+
+    return '$committed $incoming';
+  }
+
+  String _mergeLiveChunk({
+    required String committedText,
+    required String liveText,
+    required String incomingText,
+  }) {
+    final incomingWithoutCommitted = _stripOverlap(committedText, incomingText);
+    final existingLive = _normalizeText(liveText);
+
+    if (incomingWithoutCommitted.isEmpty) {
+      return existingLive;
+    }
+    if (existingLive.isEmpty) {
+      return incomingWithoutCommitted;
+    }
+    if (incomingWithoutCommitted.startsWith(existingLive)) {
+      return incomingWithoutCommitted;
+    }
+    if (existingLive.startsWith(incomingWithoutCommitted)) {
+      return existingLive;
+    }
+
+    final appendedText = _stripOverlap(existingLive, incomingWithoutCommitted);
+    if (appendedText.isEmpty) {
+      return existingLive;
+    }
+
+    return _joinTranscript(existingLive, appendedText);
+  }
+
+  String _stripOverlap(String committedText, String incomingText) {
+    final committed = _normalizeText(committedText);
+    final incoming = _normalizeText(incomingText);
+
+    if (committed.isEmpty || incoming.isEmpty) {
+      return incoming;
+    }
+
+    final committedWords = committed.split(' ');
+    final incomingWords = incoming.split(' ');
+    final maxOverlap = committedWords.length < incomingWords.length
+        ? committedWords.length
+        : incomingWords.length;
+
+    for (var overlap = maxOverlap; overlap > 0; overlap -= 1) {
+      final committedTail = committedWords.sublist(
+        committedWords.length - overlap,
+      );
+      final incomingHead = incomingWords.sublist(0, overlap);
+      if (listEquals(committedTail, incomingHead)) {
+        return incomingWords.sublist(overlap).join(' ');
+      }
+    }
+
+    return incoming;
+  }
+
+  Future<void> _startRecognitionCycle() async {
+    if (_isDisposed ||
+        !_speechEnabled ||
+        !_shouldBeListening ||
+        _isListening ||
+        _isStarting) {
+      return;
+    }
+
+    _isStarting = true;
+    _statusMessage = hasTranscript
+        ? 'Listening...'
+        : 'Starting speech recognition...';
+    _notifyListeners();
+
+    final started = await _service.listen(
+      onResult: _handleResult,
+      partialResults: true,
+      cancelOnError: true,
+      localeId: _selectedLanguage.localeId,
+    );
+
+    _isStarting = false;
+    if (!_shouldBeListening || _isDisposed) {
+      if (started && (_isListening || _service.isListening)) {
+        await _service.stop();
+      }
+      return;
+    }
+
+    if (started) {
+      _isListening = true;
+      _statusMessage = 'Listening...';
+    } else {
+      _shouldBeListening = false;
+      _statusMessage = hasTranscript
+          ? 'Ready for another search.'
+          : 'Unable to start listening.';
+      unawaited(_persistCurrentSession());
+    }
+    _notifyListeners();
+  }
+
+  void _scheduleRestart() {
+    if (_restartQueued || !_shouldBeListening || _isDisposed) {
+      return;
+    }
+
+    _restartQueued = true;
+    scheduleMicrotask(() {
+      _restartQueued = false;
+      if (_isDisposed || !_shouldBeListening || _isListening || _isStarting) {
+        return;
+      }
+      unawaited(_startRecognitionCycle());
+    });
+  }
+
+  void _notifyListeners() {
+    if (_isDisposed) {
+      return;
+    }
+
     notifyListeners();
   }
 
@@ -225,9 +457,11 @@ class SpeechController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _isDisposed = true;
     if (_service.isListening) {
       unawaited(_service.cancel());
     }
+    unawaited(_sessionStore.close());
     super.dispose();
   }
 }

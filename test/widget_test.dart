@@ -4,12 +4,52 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 
 import 'package:speech_recognition_app/main.dart';
 import 'package:speech_recognition_app/speech/speech_platform_service.dart';
+import 'package:speech_recognition_app/speech/speech_session_store.dart';
 
 void main() {
-  testWidgets('renders recognized speech from the service', (tester) async {
+  testWidgets('merges all chunks from one spoken session before saving', (
+    tester,
+  ) async {
     final service = FakeSpeechRecognitionService();
+    final sessionStore = FakeSpeechSessionStore();
 
-    await tester.pumpWidget(SpeechRecognitionApp(service: service));
+    await tester.pumpWidget(
+      SpeechRecognitionApp(service: service, sessionStore: sessionStore),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Start listening'));
+    await tester.pumpAndSettle();
+
+    service.emitResult('hello from', finalResult: true);
+    await tester.pumpAndSettle();
+
+    service.emitResult('voice search app', finalResult: true);
+    await tester.pumpAndSettle();
+
+    expect(find.text('hello from voice search app'), findsOneWidget);
+    expect(service.listenCallCount, greaterThanOrEqualTo(3));
+    expect(sessionStore.savedSessions, isEmpty);
+
+    await tester.tap(find.text('Stop listening'));
+    await tester.pumpAndSettle();
+
+    expect(sessionStore.savedSessions, hasLength(1));
+    expect(
+      sessionStore.savedSessions.single.transcript,
+      'hello from voice search app',
+    );
+  });
+
+  testWidgets('stores finalized speech after the session stops', (
+    tester,
+  ) async {
+    final service = FakeSpeechRecognitionService();
+    final sessionStore = FakeSpeechSessionStore();
+
+    await tester.pumpWidget(
+      SpeechRecognitionApp(service: service, sessionStore: sessionStore),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Start listening'));
@@ -19,13 +59,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('hello from voice search'), findsOneWidget);
-    expect(find.text('Listening...'), findsNothing);
+    expect(find.text('Stop listening'), findsOneWidget);
+    expect(sessionStore.savedSessions, isEmpty);
+
+    await tester.tap(find.text('Stop listening'));
+    await tester.pumpAndSettle();
+
+    expect(sessionStore.savedSessions, hasLength(1));
+    expect(
+      sessionStore.savedSessions.single.transcript,
+      'hello from voice search',
+    );
   });
 
   testWidgets('clear text removes the current transcript', (tester) async {
     final service = FakeSpeechRecognitionService();
+    final sessionStore = FakeSpeechSessionStore();
 
-    await tester.pumpWidget(SpeechRecognitionApp(service: service));
+    await tester.pumpWidget(
+      SpeechRecognitionApp(service: service, sessionStore: sessionStore),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Start listening'));
@@ -41,14 +94,18 @@ void main() {
 
     expect(find.text('clear me later'), findsNothing);
     expect(find.text('Your spoken text will appear here.'), findsOneWidget);
+    expect(sessionStore.savedSessions, isEmpty);
   });
 
   testWidgets('passes the selected language locale into listen', (
     tester,
   ) async {
     final service = FakeSpeechRecognitionService();
+    final sessionStore = FakeSpeechSessionStore();
 
-    await tester.pumpWidget(SpeechRecognitionApp(service: service));
+    await tester.pumpWidget(
+      SpeechRecognitionApp(service: service, sessionStore: sessionStore),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Hindi'));
@@ -60,6 +117,9 @@ void main() {
     expect(service.lastLocaleId, 'hi-IN');
 
     service.emitResult('नमस्ते', finalResult: true);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Stop listening'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Nepali'));
@@ -75,6 +135,7 @@ void main() {
 class FakeSpeechRecognitionService implements SpeechRecognitionService {
   bool available = true;
   bool listening = false;
+  int listenCallCount = 0;
   String? lastLocaleId;
   void Function(String status)? _onStatus;
   void Function(SpeechRecognitionError error)? _onError;
@@ -105,6 +166,7 @@ class FakeSpeechRecognitionService implements SpeechRecognitionService {
     String? localeId,
   }) async {
     listening = true;
+    listenCallCount += 1;
     lastLocaleId = localeId;
     _onResult = onResult;
     _onStatus?.call('listening');
@@ -140,5 +202,28 @@ class FakeSpeechRecognitionService implements SpeechRecognitionService {
 
   void emitError(String message, {bool permanent = true}) {
     _onError?.call(SpeechRecognitionError(message, permanent));
+  }
+}
+
+class FakeSpeechSessionStore implements SpeechSessionStore {
+  final List<SpeechSessionEntry> savedSessions = <SpeechSessionEntry>[];
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> saveSession({
+    required String transcript,
+    required String languageLabel,
+    required String localeId,
+    DateTime? createdAt,
+  }) async {
+    final session = SpeechSessionEntry(
+      transcript: transcript,
+      languageLabel: languageLabel,
+      localeId: localeId,
+      createdAt: createdAt ?? DateTime(2026, 4, 27, 9, 30),
+    );
+    savedSessions.insert(0, session);
   }
 }

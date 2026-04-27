@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'speech/speech_controller.dart';
 import 'speech/speech_platform_service.dart';
+import 'speech/speech_session_store.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,9 +11,10 @@ void main() {
 }
 
 class SpeechRecognitionApp extends StatelessWidget {
-  const SpeechRecognitionApp({super.key, this.service});
+  const SpeechRecognitionApp({super.key, this.service, this.sessionStore});
 
   final SpeechRecognitionService? service;
+  final SpeechSessionStore? sessionStore;
 
   @override
   Widget build(BuildContext context) {
@@ -28,15 +30,19 @@ class SpeechRecognitionApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF6F1E8),
         textTheme: GoogleFonts.manropeTextTheme(),
       ),
-      home: SpeechRecognitionScreen(service: service),
+      home: SpeechRecognitionScreen(
+        service: service,
+        sessionStore: sessionStore,
+      ),
     );
   }
 }
 
 class SpeechRecognitionScreen extends StatefulWidget {
-  const SpeechRecognitionScreen({super.key, this.service});
+  const SpeechRecognitionScreen({super.key, this.service, this.sessionStore});
 
   final SpeechRecognitionService? service;
+  final SpeechSessionStore? sessionStore;
 
   @override
   State<SpeechRecognitionScreen> createState() =>
@@ -51,6 +57,7 @@ class _SpeechRecognitionScreenState extends State<SpeechRecognitionScreen> {
     super.initState();
     _controller = SpeechController(
       service: widget.service ?? SpeechToTextSpeechRecognitionService(),
+      sessionStore: widget.sessionStore ?? SqfliteSpeechSessionStore(),
     );
     _controller.initialize();
   }
